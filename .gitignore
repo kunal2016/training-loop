@@ -1,0 +1,5 @@
+data/
+.ipynb_checkpoints/
+__pycache__/
+runs/*
+!runs/Tesla-T4_20261005-071659/
