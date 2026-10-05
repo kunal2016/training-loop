@@ -1,7 +1,5 @@
 # Training Loop, Under the Microscope
 
-**Author:** Kunal Sinha
-
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kunal2016/training-loop/blob/main/training_loop.ipynb)
 
 A small GPT and a real training loop on real text, instrumented until it tells the truth about itself. Six experiments, each answering one question you should be able to answer about any training run:
