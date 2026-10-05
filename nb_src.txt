@@ -341,7 +341,7 @@ ax.text(4e-4, 3e-10, 'truncation ~ eps²', color=INK2, fontsize=9)
 ax.text(1.2e-8, 4e0, 'fp32 rounding ~ ulp/2eps', color=ORANGE, fontsize=9)
 ax.text(1.2e-8, 2.5e-8, 'fp64 rounding', color=BLUE, fontsize=9)
 ax.set_ylim(1e-11, 3e1); ax.set_xlabel('finite-difference step eps'); ax.set_ylabel('relative error vs backward()')
-ax.set_title('Gradient check: finite difference vs backward()'); ax.legend(loc='lower right')
+ax.set_title('Gradient check: finite difference vs backward()'); ax.legend(loc='lower left')
 plt.tight_layout(); plt.savefig(os.path.join(FIG_DIR, 'gradcheck_eps_sweep.png')); plt.show()
 print(f'loss L = {L0:.4f}; float32 spacing at L is {ulp32:.2e}; at eps=1e-6 the true change 2*eps*|g| = {2e-6 * g0:.1e} is below it, so L(w+eps) == L(w-eps) and the finite difference is exactly 0.')
 METRICS['gradcheck_sweep'] = dict(eps=eps_list, fp64=sweep['torch.float64'], fp32=sweep['torch.float32'])
@@ -351,7 +351,7 @@ checkpoint('2. gradient check')
 What the sweep shows:
 
 - **float64** traces a clean V: error falls as ε² (truncation) until ε ≈ 1e-5, where it reaches **~1e-10, i.e. ten matching digits**; below that, rounding takes over and the error climbs again.
-- **float32** never gets better than ~1e-3 (three digits). The loss is ~4.17, and float32 can only resolve changes of ~4.8e-7 at that magnitude. The finite difference divides that rounding noise by 2ε, so shrinking ε makes it *worse*; at ε ≤ 1e-6 the nudge is smaller than one ulp of the loss and the two forward passes return the identical number — a "gradient" of exactly 0. The optimum sits near ε ≈ (u)^(1/3), about 1e-2 to 1e-3 for fp32 and 1e-5 for fp64, exactly where the minima are.
+- **float32** never gets better than ~1e-3 (three digits). The loss is ~4.24, and float32 can only resolve changes of ~4.8e-7 at that magnitude. The finite difference divides that rounding noise by 2ε, so shrinking ε makes it *worse*; at ε ≤ 1e-6 the nudge is smaller than one ulp of the loss and the two forward passes return the identical number — a "gradient" of exactly 0. The optimum sits near ε ≈ (u)^(1/3), about 1e-2 to 1e-3 for fp32 and 1e-5 for fp64, exactly where the minima are.
 
 So if a float32 gradient check "disagrees in the 4th decimal", that is the arithmetic, not autograd. Gradient checks belong in float64.
 
@@ -634,8 +634,8 @@ axz.annotate('loss moves', xy=(T_EV + lag_ev, PL[T_EV + lag_ev]), xytext=(14, -4
 axz.xaxis.set_major_locator(matplotlib.ticker.MultipleLocator(2))
 axz2 = fig.add_subplot(gs[1, 1], sharex=axz); axz2.plot(zs, PG[zs], 'o-', color=ORANGE, ms=5); axz2.axvline(T_EV, color=INK2, lw=.8, ls=':')
 axz2.plot(zs, [np.median(PG[t - 20:t]) * 1.5 for t in zs], color=INK2, lw=1, ls='--')
-axz2.text(zs[-1], np.median(PG[zs[-1] - 20:zs[-1]]) * 1.5 + .04, '1.5 x trailing median', color=INK2, fontsize=8, ha='right')
-axz2.annotate('grad norm moves first', xy=(T_EV, PG[T_EV]), xytext=(-130, -45), textcoords='offset points', color=INK, fontsize=9, arrowprops=dict(arrowstyle='-', color=INK2, lw=.8))
+axz2.text(0.98, 0.97, 'dashed: 1.5 x trailing median', transform=axz2.transAxes, color=INK2, fontsize=8, ha='right', va='top')
+axz2.annotate('grad norm moves first', xy=(T_EV, PG[T_EV]), xytext=(-150, 10), textcoords='offset points', color=INK, fontsize=9, arrowprops=dict(arrowstyle='-', color=INK2, lw=.8))
 axz2.set_title(f'Zoom: probe grad norm around step {T_EV}'); axz2.set_xlabel('step'); axz2.set_ylabel('probe grad norm')
 plt.savefig(os.path.join(FIG_DIR, 'gradnorm_leads_loss.png'), bbox_inches='tight'); plt.show()
 
@@ -845,13 +845,13 @@ checkpoint('5c. width sweep')
 The headline depends entirely on the denominator, so here are both, and which one I stand behind:
 
 - **Against the fp32 vector peak, the fp32 training config lands between about 26% and 43%.** That is the spread I saw across ten executions on this shared 2-vCPU VM; the cell above prints this execution's median and range over 5 timing windows, and the sweep times it once more. So on this yardstick it is close to 40% but usually short of it. MKL/oneDNN on AVX-512 is very good at medium-sized fp32 GEMMs; what is left is the ~40–45% of op time spent outside matmuls (profile below).
-- **That yardstick flatters me.** The 40% convention comes from GPUs measured against their bf16 tensor-core peak. This CPU's equivalent is AMX, which is 16× the fp32 vector peak. **Against the bf16/AMX peak, my training config is at about 3% MFU, and even with bf16 autocast it is in the single digits.** That is the number I report as my MFU.
+- **That yardstick flatters me.** The 40% convention comes from GPUs measured against their bf16 tensor-core peak. This CPU's equivalent is AMX, which is 16× the fp32 vector peak. **Against the bf16/AMX peak, my training config is at about 2–3% MFU (this run's value is printed above), and even with bf16 autocast it is in the single digits.** That is the number I report as my MFU.
 - My actual 600-step main run did worse still on wall clock, because a third of its time went to the per-step probe diagnostics, which are not model FLOPs.
 
 **What is costing the distance to 40% (of the bf16 peak), largest first:**
 
 1. **Precision.** fp32 matmuls cannot use AMX at all. Training in fp32 caps MFU at 1/16 ≈ 6% of the bf16 peak before anything else goes wrong.
-2. **The matrices are tiny.** d = 128, head size 32, T = 128. AMX works on 16×32 bf16 tiles; with an inner dimension of 128 there is almost no reuse per tile load, so the units starve on memory and on oneDNN's re-packing of operands into tile layout. The width sweep shows the trend: utilisation climbs steadily with d. Even a large 2048² bf16 matmul reaches only about 40–60% of the AMX theoretical peak on two cores, depending on the run (printed above), so on this box the practical ceiling is already around half the peak before any model-specific loss.
+2. **The matrices are tiny.** d = 128, head size 32, T = 128. AMX works on 16×32 bf16 tiles; with an inner dimension of 128 there is almost no reuse per tile load, so the units starve on memory and on oneDNN's re-packing of operands into tile layout. The width sweep shows the trend: utilisation climbs with d, though the top of the sweep is noisy on a shared machine. Even a large 2048² bf16 matmul reaches only about 40–60% of the AMX theoretical peak on two cores, depending on the run (printed above), so on this box the practical ceiling is already around half the peak before any model-specific loss.
 3. **Non-matmul work becomes the bottleneck once matmuls get fast.** In the profile, softmax / LayerNorm / GELU / cross-entropy, copies and masks, and the AdamW update are memory-bound and earn zero model FLOPs. Their share grows sharply in the bf16 run, because autocast makes the matmuls faster and adds dtype casts but does not speed up the rest. That is Amdahl's law in one table.
 4. **Attention is unfused.** I materialise the (B, H, T, T) score and probability tensors and the causal mask explicitly. A fused attention kernel (`F.scaled_dot_product_attention`, FlashAttention on GPU) would never write them to memory.
 5. **Eager PyTorch overhead.** Dozens of small kernels per layer, each with Python and dispatcher overhead; no `torch.compile` to fuse elementwise chains.
@@ -942,7 +942,10 @@ print('\nWhy it matters for training:')
 one = torch.tensor(1.0, dtype=torch.bfloat16)
 print(f'  bf16:  1.0 + 0.001 = {(one + torch.tensor(1e-3, dtype=torch.bfloat16)).item()}   (spacing of bf16 at 1.0 is 2^-7 = {2 ** -7}; a small update is silently lost)')
 print(f'  fp32:  1.0 + 0.001 = {(torch.tensor(1.0) + 1e-3).item():.7f}')
-print(f'  fp8 E4M3: 500.0 -> {torch.tensor(500.0).to(torch.float8_e4m3fn).float().item()}  (saturates at 448: needs per-tensor scaling);  0.001 -> {torch.tensor(1e-3).to(torch.float8_e4m3fn).float().item()}  (smallest subnormal is 2^-9 = {2 ** -9:.5f})')
+big = torch.tensor(500.0).to(torch.float8_e4m3fn).float().item()
+what = 'saturated to the max, 448' if big == 448 else ('became NaN: this PyTorch version does not saturate' if big != big else 'unexpected')
+print(f'  fp8 E4M3: 500.0 -> {big}  ({what}; either way values above 448 need per-tensor scaling)')
+print(f'  fp8 E4M3: 0.001 -> {torch.tensor(1e-3).to(torch.float8_e4m3fn).float().item()}  (smallest subnormal is 2^-9 = {2 ** -9:.5f})')
 print(f'  fp16 for contrast: 70000 -> {torch.tensor(70000.0).half().item()}, 1e-8 -> {torch.tensor(1e-8).half().item()}  (overflow / underflow: why fp16 needs loss scaling and bf16 does not)')
 checkpoint('6. number formats')
 
@@ -954,7 +957,7 @@ checkpoint('6. number formats')
 - **bf16 has fp32's exponent range** (8 bits, ~1e-38 to ~3e38). Gradients and activations neither overflow nor underflow, so unlike fp16 there is no loss scaling to tune and no skipped steps. That alone removes a whole class of training failures.
 - **Its precision is poor (~3 significant digits)** — 0.1 comes back as 0.10009765625. That is fine for the *inputs* of a matmul, whose errors average out across a long dot product accumulated in fp32, but fatal for the *weights*: as shown above, bf16 cannot represent 1.0 + 0.001, so a typical Adam update (lr × ~1) on a weight of size ~1 would simply vanish. Hence the fp32 master copy that the optimizer updates.
 - **It is what the hardware is built for.** Tensor cores and, on this machine, AMX run bf16 at 16× the fp32 vector rate. Section 5 showed fp32 training caps MFU at ~6% of this box's real peak.
-- **fp8 E4M3 is not the format to train *in*.** Two fraction bits after rounding mean 0.1 is off by 1.6%, and 448 is the largest value. It is used at very large scale for the matmuls only, with per-tensor (or per-block) scaling factors, E5M2 for gradients, and everything else still in bf16/fp32. For a 0.8 M-parameter model on a CPU, the engineering cost buys nothing.
+- **fp8 E4M3 is not the format to train *in*.** With only three fraction bits, 0.1 is off by 1.6%, and 448 is the largest value; anything larger either saturates to 448 or becomes NaN, depending on the converter (the cell above shows which one this PyTorch does). It is used at very large scale for the matmuls only, with per-tensor (or per-block) scaling factors, E5M2 for gradients, and everything else still in bf16/fp32. For a 0.8 M-parameter model on a CPU, the engineering cost buys nothing.
 - **fp32 everywhere** (what I actually did here) is the safe reference and the right choice for correctness checks like the gradient check, but it leaves most of the hardware idle.
 
 #%% md

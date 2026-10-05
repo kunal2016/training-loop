@@ -3,3 +3,4 @@ data/
 __pycache__/
 runs/*
 !runs/Tesla-T4_20261005-071659/
+training_loop_built.ipynb
