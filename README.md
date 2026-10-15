@@ -180,7 +180,7 @@ The grad norm measures the *slope* where the weights are; the loss measures the 
 
 **Four denominators.** MFU depends entirely on what you divide by, and no single peak is correct for every workload. So every MFU here is named in three parts, **precision · source · hardware**:
 - **Theoretical** is the spec-sheet number (cores × clock × FLOP/cycle).
-- **Measured** is the best of three 2048² matmuls timed on the same machine.
+- **Measured** is a large square matmul timed on the same machine: 2048² on CPU, 8192² on GPU, best of three timings. Emulated bf16 is timed once, to keep it short.
 
 An earlier version silently used max(theoretical, measured). That made "fp32 peak" mean a measured number on the CPU but a spec-sheet number on the GPU, so the two weren't comparable. Now all four are reported.
 
@@ -295,7 +295,7 @@ The notebook was run on Google Colab with a **Tesla T4** (PyTorch 2.11, CUDA 13.
 
 **The denominator decides which machine looks better.** Compared like for like, the T4's fp32 run is *above* the CPU's against measured denominators (43.6% vs 34.9%), and *below* it against theoretical ones (18.7% vs 22.7%). The CPU's measured fp32 matmul reaches 65% of its spec sheet, while the T4's 8192² fp32 matmul reaches only 43% of its published 8.1 TFLOP/s. Neither column is wrong; they answer different questions, which is why each MFU is labelled precision · source · hardware.
 
-The T4 numbers are derived from that run's saved `metrics.json`. That run still uses the old metric names: `peak_bf16_*` and `bf16_*` there hold its **fp16** values. Its figure is re-plotted from the same saved numbers with the new labels.
+The T4 numbers are derived from that run's saved `metrics.json`. That run still uses the old metric names: `peak_bf16_*` and `bf16_*` there hold its **fp16** values. Its folder's own [README](runs/Tesla-T4_20261005-071659/README.md) maps them to the new names. Its figure is re-plotted from the same saved numbers with the new labels.
 
 **What carries over exactly.** The accumulation experiment gives the same validation losses on both machines to four decimals, so the broken-accumulation gap (+0.054 nats, worse on every seed) is a property of the algorithm, not the hardware. The gradient check agrees to 8.7–9.6 digits on the main weight (7.8–10.4 across the six parameters checked), and the 0.1 bit patterns are identical by construction.
 

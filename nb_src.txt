@@ -656,7 +656,7 @@ I cross-check the formula against PyTorch's own `FlopCounterMode`, which counts 
 **Four denominators, all reported.** MFU depends entirely on what you divide by, and no single peak is correct for every workload. So every MFU in this notebook is labelled with three parts: **precision · source · hardware**.
 
 - *Precision:* fp32, or the low-precision format the hardware accelerates (bf16; fp16 on GPUs without native bf16).
-- *Source:* **theoretical** = the spec-sheet number (cores × clock × FLOP/cycle on a CPU, the published figure on a GPU); **measured** = the best of three large dense matmuls timed on the same machine.
+- *Source:* **theoretical** = the spec-sheet number (cores × clock × FLOP/cycle on a CPU, the published figure on a GPU); **measured** = a large square matmul timed on the same machine: 2048² on CPU, 8192² on GPU, best of three timings (emulated bf16 is timed once, to keep it short).
 - *Hardware:* the device it ran on.
 
 That gives four denominators: fp32 theoretical, fp32 measured, low-precision theoretical, low-precision measured. Every run is reported against each one that applies. (An earlier version silently used max(theoretical, measured), so "fp32 peak" meant a measured number on the CPU and a spec-sheet number on the GPU. Comparing those was not like for like.)
