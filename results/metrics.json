@@ -12,7 +12,7 @@
       "summary"
     ],
     "finished": true,
-    "saved_at": "2026-10-05 08:12:43"
+    "saved_at": "2026-10-15 06:21:22"
   },
   "shapes": {
     "n_forward": 68,
@@ -125,68 +125,128 @@
     ]
   },
   "mfu": {
-    "peak_fp32_theory": 268800000000.0,
-    "peak_fp32_measured": 293524191847.6012,
-    "peak_bf16_theory": 4300800000000.0,
-    "peak_bf16_measured": 1735503809581.2258,
-    "fp32_achieved": 87364569116.83533,
-    "bf16_achieved": 199213142369.72913,
-    "fp32_mfu_vs_fp32": 0.2976400976250548,
-    "fp32_mfu_vs_bf16": 0.020313562387657025,
-    "fp32_mfu_vs_fp32_range": [
-      0.26504492184880724,
-      0.3296939714133023
-    ],
-    "fp32_mfu_vs_bf16_range": [
-      0.01808898262857649,
-      0.02250119896673077
-    ],
-    "bf16_mfu_vs_bf16_range": [
-      0.04372363680330982,
-      0.04788762101701407
-    ],
-    "bf16_mfu_vs_bf16": 0.04632002008224729,
     "device": "cpu",
-    "low_precision": "bf16",
-    "main_run_mfu_fp32": 0.19882062886975843,
+    "hardware": "CPU",
+    "low_precision_dtype": "bf16",
+    "peaks": {
+      "fp32_theoretical": 358400000000.0,
+      "fp32_measured": 233450882781.13406,
+      "lowp_theoretical": 358400000000.0,
+      "lowp_measured": 54386920852.62244
+    },
+    "peak_labels": {
+      "fp32_theoretical": "fp32 theoretical (AVX-512 spec, CPU)",
+      "fp32_measured": "fp32 measured (2048\u00b2 matmul, CPU)",
+      "lowp_theoretical": "bf16 theoretical (no bf16 hardware: fp32 rate, CPU)",
+      "lowp_measured": "bf16 measured (2048\u00b2 matmul, CPU)"
+    },
+    "achieved_flops_per_s": {
+      "fp32_run": 81455543931.2167,
+      "fp32_run_range": [
+        67769438687.72156,
+        86698509696.0954
+      ],
+      "lowp_run": 40797681474.76376,
+      "lowp_run_range": [
+        40797681474.76376,
+        40797681474.76376
+      ],
+      "main_run_wallclock_incl_probes": 46586261048.591644
+    },
+    "fp32_run": {
+      "fp32_theoretical": 0.22727551320093947,
+      "fp32_measured": 0.34891940848895087
+    },
+    "fp32_run_range": {
+      "fp32_theoretical": [
+        0.1890888356242231,
+        0.2419043239288376
+      ],
+      "fp32_measured": [
+        0.2902942061318186,
+        0.37137794752902
+      ]
+    },
+    "lowp_run": {
+      "lowp_theoretical": 0.11383281661485425,
+      "lowp_measured": 0.7501377322926083
+    },
+    "lowp_run_range": {
+      "lowp_theoretical": [
+        0.11383281661485425,
+        0.11383281661485425
+      ],
+      "lowp_measured": [
+        0.7501377322926083,
+        0.7501377322926083
+      ]
+    },
+    "main_run_wallclock_incl_probes": {
+      "fp32_theoretical": 0.12998398730075794,
+      "fp32_measured": 0.1995548720724582
+    },
+    "step_ms": {
+      "fp32_run": 281.4163263749947,
+      "lowp_run": 561.8682020001415
+    },
     "flops_ratio": 0.9925895430218197
   },
   "profile": {
     "fp32": {
-      "matmul": 0.5300121320033467,
-      "copies/indexing/masks": 0.18357663089916318,
-      "other elementwise": 0.14003130075626125,
-      "softmax/LN/GELU/CE": 0.13737512753122325,
-      "optimizer": 0.009004808810005514
+      "matmul": 0.5793555301725487,
+      "copies/indexing/masks": 0.1508579505577866,
+      "softmax/LN/GELU/CE": 0.14750003461777958,
+      "other elementwise": 0.11127339387450619,
+      "optimizer": 0.011013090777378965
     },
     "bf16": {
-      "matmul": 0.3844953681643302,
-      "copies/indexing/masks": 0.24581379982605758,
-      "softmax/LN/GELU/CE": 0.209341645263136,
-      "other elementwise": 0.14390118289850506,
-      "optimizer": 0.016448003847971047
+      "matmul": 0.8175256683882486,
+      "copies/indexing/masks": 0.06823939049427435,
+      "softmax/LN/GELU/CE": 0.060821964121687874,
+      "other elementwise": 0.049370426616408135,
+      "optimizer": 0.004042550379380951
     }
   },
   "mfu_sweep": [
     {
       "d": 64,
-      "fp32": 78214412139.48601,
-      "bf16": 121575347333.125
+      "fp32_run_flops": 54086951448.1763,
+      "lowp_run_flops": null,
+      "fp32_run": {
+        "fp32_theoretical": 0.15091225292459906,
+        "fp32_measured": 0.23168450169830432
+      },
+      "lowp_run": null
     },
     {
       "d": 128,
-      "fp32": 100025882411.82779,
-      "bf16": 226334939808.3044
+      "fp32_run_flops": 81483707661.48888,
+      "lowp_run_flops": null,
+      "fp32_run": {
+        "fp32_theoretical": 0.22735409503763637,
+        "fp32_measured": 0.34904004941322864
+      },
+      "lowp_run": null
     },
     {
       "d": 256,
-      "fp32": 144511041237.2438,
-      "bf16": 350971238352.3024
+      "fp32_run_flops": 115364064064.93028,
+      "lowp_run_flops": null,
+      "fp32_run": {
+        "fp32_theoretical": 0.3218863394668814,
+        "fp32_measured": 0.494168463578212
+      },
+      "lowp_run": null
     },
     {
       "d": 512,
-      "fp32": 146489058408.4738,
-      "bf16": 335563217808.9107
+      "fp32_run_flops": 141753185069.6836,
+      "lowp_run_flops": null,
+      "fp32_run": {
+        "fp32_theoretical": 0.3955166994131797,
+        "fp32_measured": 0.6072077491460193
+      },
+      "lowp_run": null
     }
   ],
   "fp_0p1": {

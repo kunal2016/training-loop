@@ -653,13 +653,21 @@ MFU = (FLOPs the model *mathematically requires* per second) / (peak FLOPs the h
 
 I cross-check the formula against PyTorch's own `FlopCounterMode`, which counts every matmul actually dispatched in forward and backward.
 
-**Peak.** The committed run is on a machine with no GPU: 2 cores of an Intel Xeon with AVX-512 (2 FMA units → 64 fp32 FLOP/cycle/core) and AMX at a nominal 2.1 GHz. Turbo can exceed nominal, so I also measure a large dense matmul and use whichever is higher as the peak — the conservative choice for MFU.
+**Four denominators, all reported.** MFU depends entirely on what you divide by, and no single peak is correct for every workload. So every MFU in this notebook is labelled with three parts: **precision · source · hardware**.
 
-*Assumption on the AMX peak:* Intel's Architecture Day 2021 material states AMX does "1,024 bf16 operations per cycle per core". I read that as 1,024 FLOPs (512 multiply-adds). If Intel counted each multiply-add as one operation, the true peak would be 2× higher and every bf16-relative MFU below would halve. So the bf16 MFU figures are, if anything, generous. AMX can also run below nominal clock under heavy load, which pushes the other way. The measured 2048² bf16 matmul is a hard lower bound on the peak, and it is printed alongside.
+- *Precision:* fp32, or the low-precision format the hardware accelerates (bf16; fp16 on GPUs without native bf16).
+- *Source:* **theoretical** = the spec-sheet number (cores × clock × FLOP/cycle on a CPU, the published figure on a GPU); **measured** = the best of three large dense matmuls timed on the same machine.
+- *Hardware:* the device it ran on.
 
-*On a GPU* (for example Colab) the same cells take the peak from a table of published dense numbers for common GPUs (or from the `PEAK_BF16_TFLOPS` / `PEAK_FP32_TFLOPS` environment variables). They time with `cuda.synchronize()`, profile GPU kernel time, and add a d = 1024 point to the width sweep. On GPUs without native bf16 (Colab's free T4, V100) the low-precision runs use fp16 instead, and the labels say so. TF32 is switched off so that "fp32" really is fp32. The numbers in the prose below are from the committed CPU run.
+That gives four denominators: fp32 theoretical, fp32 measured, low-precision theoretical, low-precision measured. Every run is reported against each one that applies. (An earlier version silently used max(theoretical, measured), so "fp32 peak" meant a measured number on the CPU and a spec-sheet number on the GPU. Comparing those was not like for like.)
 
-*On a CPU without bf16 hardware* (no AMX or AVX-512-BF16, for example the AMD EPYC machines Colab gives you without a GPU), PyTorch emulates bf16 and it runs more than 10× slower than fp32. The cells detect this, say so, measure bf16 once briefly to show the cost, and skip the bf16 width sweep, which would otherwise take about an hour. When the clock speed isn't in the CPU's name, it is read from `/proc/cpuinfo` instead of assumed.
+The committed CPU run is on a machine with no GPU: 2 cores of an Intel Xeon at 2.8 GHz with AVX-512 (2 FMA units → 64 fp32 FLOP/cycle/core), but **no bf16 hardware**: no AMX, no AVX-512-BF16. So PyTorch emulates bf16 there. The bf16 theoretical denominator is then just the fp32 rate, since emulation can never beat it. On this machine the measured fp32 matmul is well below the spec sheet; on others, turbo can push it above. Both are real, so both are shown.
+
+*On a CPU with AMX* the bf16 theoretical denominator is 1,024 FLOP/cycle/core, 16× the AVX-512 fp32 rate. Intel's Architecture Day 2021 material says AMX does "1,024 bf16 operations per cycle per core"; I read that as 1,024 FLOPs (512 multiply-adds). If Intel counted each multiply-add as one operation, that denominator doubles. An earlier committed version of this repo ran on such a machine (2.1 GHz Xeon with AMX). There, the fp32 run reached 29.8% of the fp32 measured denominator but only 2.0% of the bf16 theoretical (AMX spec) one, the clearest example of how much the choice matters.
+
+*On a GPU* (for example Colab) the same cells take the theoretical denominators from a table of published dense numbers for common GPUs (or from the `PEAK_BF16_TFLOPS` / `PEAK_FP32_TFLOPS` environment variables). They time with `cuda.synchronize()`, profile GPU kernel time, and add a d = 1024 point to the width sweep. On GPUs without native bf16 (Colab's free T4, V100) the low-precision runs use fp16 instead, and the labels say so. TF32 is switched off so that "fp32" really is fp32. The numbers in the prose below are from the committed CPU run.
+
+*On a CPU without bf16 hardware* (no AMX or AVX-512-BF16, for example the AMD EPYC machines Colab gives you without a GPU), PyTorch emulates bf16, and it runs much slower than fp32: 2× slower on this run's Xeon, more than 10× on Colab's AMD EPYC. The cells detect this, say so, measure bf16 once briefly to show the cost, and skip the bf16 width sweep, which would otherwise take about an hour. When the clock speed isn't in the CPU's name, it is read from `/proc/cpuinfo` instead of assumed.
 
 #%% code
 from torch.utils.flop_counter import FlopCounterMode
@@ -705,7 +713,7 @@ if DEVICE == 'cuda':
     known = next((v for k, v in GPU_PEAKS.items() if k in gname), None)
     peak_bf16_theory = float(os.environ.get('PEAK_BF16_TFLOPS', known[0] if known else 0)) * 1e12
     peak_fp32_theory = float(os.environ.get('PEAK_FP32_TFLOPS', known[1] if known else 0)) * 1e12
-    peak_desc_fp32 = peak_desc_bf16 = f'published spec for {gname}' if known else f'{gname} not in table: measured matmul used as peak'
+    peak_desc_fp32 = peak_desc_bf16 = f'published spec for {gname}' if known else f'{gname} not in table: theoretical n/a, set PEAK_*_TFLOPS'
 else:
     def cpu_ghz():
         m = re.search(r'([\d.]+)\s*GHz', cpu_name)
@@ -723,12 +731,35 @@ else:
     peak_desc_bf16 = (f'{cores} cores x {ghz} GHz x {bf16_per_cycle} FLOP/cycle' if LP_FAST
                       else 'no bf16 hardware: at best the fp32 rate')
 
+MM_N32 = 8192 if DEVICE == 'cuda' else 2048
+MM_NLP = MM_N32                                                       # same size for both, so the two measured denominators compare
 meas_fp32 = matmul_flops(torch.float32)
-meas_bf16 = matmul_flops(LP_DTYPE) if LP_FAST else matmul_flops(LP_DTYPE, n=512, reps=2, trials=1)   # emulated: keep it short
-PEAK_FP32 = max(peak_fp32_theory, meas_fp32); PEAK_BF16 = max(peak_bf16_theory, meas_bf16)
-if not LP_FAST: PEAK_BF16 = PEAK_FP32      # emulated bf16 can never beat the fp32 rate, so that is its ceiling
-print(f'fp32: theory {peak_fp32_theory / 1e9:.0f} GFLOP/s ({peak_desc_fp32}),  measured matmul {meas_fp32 / 1e9:.0f}  ->  peak used {PEAK_FP32 / 1e9:.0f}')
-print(f'{LP_NAME}: theory {peak_bf16_theory / 1e9:.0f} GFLOP/s ({peak_desc_bf16}),  measured matmul {meas_bf16 / 1e9:.0f}  ->  peak used {PEAK_BF16 / 1e9:.0f}')
+meas_bf16 = matmul_flops(LP_DTYPE) if LP_FAST else matmul_flops(LP_DTYPE, reps=2, trials=1)   # emulated: fewer repetitions, same size
+
+# Four denominators, each named precision · source · hardware. No max(): theoretical and measured are different kinds of number.
+HW = gname if DEVICE == 'cuda' else 'CPU'
+if DEVICE == 'cuda':
+    src32 = srclp = 'published spec' if known or os.environ.get('PEAK_BF16_TFLOPS') else None
+else:
+    src32 = 'AVX-512 spec' if 'avx512f' in flags else ('AVX2/FMA spec' if 'fma' in flags else 'scalar estimate')
+    srclp = {'AMX': 'AMX spec', 'AVX-512-BF16': 'AVX-512-BF16 spec'}.get(LP_HW, 'no bf16 hardware: fp32 rate')
+DENOMS = {   # key: (FLOP/s or None, label)
+    'fp32_theoretical': (peak_fp32_theory or None, f'fp32 theoretical ({src32}, {HW})'),
+    'fp32_measured':    (meas_fp32,                 f'fp32 measured ({MM_N32}² matmul, {HW})'),
+    'lowp_theoretical': (peak_bf16_theory or None, f'{LP_NAME} theoretical ({srclp}, {HW})'),
+    'lowp_measured':    (meas_bf16,                 f'{LP_NAME} measured ({MM_NLP}² matmul, {HW})'),
+}
+ALL_KEYS, LOWP_KEYS = list(DENOMS), ['lowp_theoretical', 'lowp_measured']
+RUN32_KEYS = ALL_KEYS if LP_FAST else ['fp32_theoretical', 'fp32_measured']   # emulated low precision is slower than fp32: no meaningful ceiling for an fp32 run
+SHORT = {'fp32_theoretical': 'fp32 theor.', 'fp32_measured': 'fp32 meas.', 'lowp_theoretical': f'{LP_NAME} theor.', 'lowp_measured': f'{LP_NAME} meas.'}
+def mfu_vs(flops_per_s, keys):
+    return {k: (flops_per_s / DENOMS[k][0] if DENOMS[k][0] else None) for k in keys}
+def pct(x): return f'{x:6.1%}' if x is not None else '   n/a'
+
+print('Denominators (MFU is reported against each; none of them is "the" right one):')
+for k, (v, lab) in DENOMS.items():
+    detail = {'fp32_theoretical': peak_desc_fp32, 'lowp_theoretical': peak_desc_bf16}.get(k, 'best of 3 timed runs')
+    print(f'  {lab:<54} {v / 1e9 if v else float("nan"):9.0f} GFLOP/s   ({detail})')
 
 def model_flops_per_token(m, T):
     c = m.cfg; N = sum(p.numel() for p in m.parameters()) - m.tok.weight.numel() - m.pos.weight.numel()
@@ -759,16 +790,32 @@ def bench(d=128, n_layer=4, B=32, T=128, amp=False, steps=12, repeats=1):
 r32 = bench(steps=8, repeats=5)
 r16 = bench(amp=True, steps=8, repeats=5) if LP_FAST else bench(amp=True, steps=2, repeats=1)
 print(f'\nFLOPs per step (B=32, T=128): formula {r32["flops_formula"]:.4e}   FlopCounterMode {r32["flops_counted"]:.4e}   (ratio {r32["flops_counted"] / r32["flops_formula"]:.3f})')
-for name, r, pk in [('fp32 (how I trained)', r32, PEAK_FP32), (f'{LP_NAME} autocast', r16, PEAK_BF16)]:
-    print(f'{name:<22} median of {r["repeats"]}: {r["step_s"] * 1e3:6.1f} ms/step  {r["tok_s"]:8,.0f} tok/s  {r["achieved"] / 1e9:6.1f} GFLOP/s'
-          f'  | MFU vs fp32 peak {r["achieved"] / PEAK_FP32:5.1%} (range {r["achieved_lo"] / PEAK_FP32:.1%}-{r["achieved_hi"] / PEAK_FP32:.1%})'
-          f'  | MFU vs {LP_NAME} peak {r["achieved"] / PEAK_BF16:4.1%} (range {r["achieved_lo"] / PEAK_BF16:.1%}-{r["achieved_hi"] / PEAK_BF16:.1%})')
-mfu_run = model_flops_per_token(main, MAIN_T) * MAIN_B * MAIN_T * MAIN_STEPS / wall_main
-print(f'\nmy actual main run, wall clock incl. probe diagnostics: {mfu_run / 1e9:.1f} GFLOP/s of model FLOPs  ->  MFU {mfu_run / PEAK_FP32:.1%} (fp32 peak), {mfu_run / PEAK_BF16:.1%} ({LP_NAME} peak)')
-METRICS['mfu'] = dict(peak_fp32_theory=peak_fp32_theory, peak_fp32_measured=meas_fp32, peak_bf16_theory=peak_bf16_theory, peak_bf16_measured=meas_bf16,
-                      fp32_achieved=r32['achieved'], bf16_achieved=r16['achieved'], fp32_mfu_vs_fp32=r32['achieved'] / PEAK_FP32, fp32_mfu_vs_bf16=r32['achieved'] / PEAK_BF16, fp32_mfu_vs_fp32_range=[r32['achieved_lo'] / PEAK_FP32, r32['achieved_hi'] / PEAK_FP32],
-                      fp32_mfu_vs_bf16_range=[r32['achieved_lo'] / PEAK_BF16, r32['achieved_hi'] / PEAK_BF16], bf16_mfu_vs_bf16_range=[r16['achieved_lo'] / PEAK_BF16, r16['achieved_hi'] / PEAK_BF16],
-                      bf16_mfu_vs_bf16=r16['achieved'] / PEAK_BF16, device=DEVICE, low_precision=LP_NAME, main_run_mfu_fp32=mfu_run / PEAK_FP32, flops_ratio=r32['flops_counted'] / r32['flops_formula'])
+for name, r in [('fp32 run (how I trained)', r32), (f'{LP_NAME} autocast run', r16)]:
+    print(f'{name:<26} median of {r["repeats"]}: {r["step_s"] * 1e3:6.1f} ms/step  {r["tok_s"]:8,.0f} tok/s  '
+          f'{r["achieved"] / 1e9:7.1f} GFLOP/s of model FLOPs (timing range {r["achieved_lo"] / 1e9:.1f}-{r["achieved_hi"] / 1e9:.1f})')
+mfu_run = model_flops_per_token(main, MAIN_T) * MAIN_B * MAIN_T * MAIN_STEPS / wall_main   # different numerator: wall clock incl. probes
+
+rows = [('fp32 run', r32['achieved'], RUN32_KEYS), (f'{LP_NAME} run', r16['achieved'], LOWP_KEYS),
+        ('main run (wall clock incl. probes)', mfu_run, RUN32_KEYS)]
+print(f'\nMFU = model FLOP/s ÷ denominator ({HW})')
+print(f'{"":<36}' + ''.join(f'{SHORT[k]:>14}' for k in ALL_KEYS))
+for name, flops, keys in rows:
+    m = mfu_vs(flops, keys)
+    print(f'{name:<36}' + ''.join(f'{(pct(m[k]) if k in m else "     -"):>14}' for k in ALL_KEYS))
+print('Denominators in full: ' + '; '.join(DENOMS[k][1] for k in ALL_KEYS))
+
+def ranged(r, keys): return {k: ([r['achieved_lo'] / DENOMS[k][0], r['achieved_hi'] / DENOMS[k][0]] if DENOMS[k][0] else None) for k in keys}
+METRICS['mfu'] = dict(
+    device=DEVICE, hardware=HW, low_precision_dtype=LP_NAME,
+    peaks={k: v for k, (v, _) in DENOMS.items()}, peak_labels={k: lab for k, (_, lab) in DENOMS.items()},
+    achieved_flops_per_s=dict(fp32_run=r32['achieved'], fp32_run_range=[r32['achieved_lo'], r32['achieved_hi']],
+                              lowp_run=r16['achieved'], lowp_run_range=[r16['achieved_lo'], r16['achieved_hi']],
+                              main_run_wallclock_incl_probes=mfu_run),
+    fp32_run=mfu_vs(r32['achieved'], RUN32_KEYS), fp32_run_range=ranged(r32, RUN32_KEYS),
+    lowp_run=mfu_vs(r16['achieved'], LOWP_KEYS), lowp_run_range=ranged(r16, LOWP_KEYS),
+    main_run_wallclock_incl_probes=mfu_vs(mfu_run, RUN32_KEYS),
+    step_ms=dict(fp32_run=r32['step_s'] * 1e3, lowp_run=r16['step_s'] * 1e3),
+    flops_ratio=r32['flops_counted'] / r32['flops_formula'])
 checkpoint('5a. MFU')
 
 #%% md
@@ -821,43 +868,59 @@ for d in [64, 128, 256, 512] + ([1024] if DEVICE == 'cuda' else []):
     a = bench(d=d, steps=6)
     b = bench(d=d, amp=True, steps=6) if LP_FAST else None      # emulated bf16 would take ~an hour here and show nothing new
     sweep_mfu.append((d, a['achieved'], b['achieved'] if b else None))
-    lp = f'{LP_NAME} {b["achieved"] / 1e9:6.1f} GFLOP/s = {b["achieved"] / PEAK_BF16:5.1%} of {LP_NAME} peak' if b else f'{LP_NAME} skipped (no hardware support)'
-    print(f'd={d:<4} fp32 {a["achieved"] / 1e9:6.1f} GFLOP/s = {a["achieved"] / PEAK_FP32:5.1%} of fp32 peak | {lp}')
-fig, ax = plt.subplots(figsize=(7.2, 4))
+    m32 = mfu_vs(a['achieved'], RUN32_KEYS)
+    lp = (f'{LP_NAME} {b["achieved"] / 1e9:7.1f} GFLOP/s = {pct(mfu_vs(b["achieved"], LOWP_KEYS)["lowp_theoretical"])} {SHORT["lowp_theoretical"]}, '
+          f'{pct(mfu_vs(b["achieved"], LOWP_KEYS)["lowp_measured"])} {SHORT["lowp_measured"]}') if b else f'{LP_NAME} skipped (no hardware support)'
+    print(f'd={d:<4} fp32 {a["achieved"] / 1e9:7.1f} GFLOP/s = {pct(m32["fp32_theoretical"])} {SHORT["fp32_theoretical"]}, '
+          f'{pct(m32["fp32_measured"])} {SHORT["fp32_measured"]}' + (f', {pct(m32["lowp_theoretical"])} {SHORT["lowp_theoretical"]}' if LP_FAST else '') + f' | {lp}')
+fig, ax = plt.subplots(figsize=(8.6, 5.2))
 ds = [s[0] for s in sweep_mfu]
-ax.plot(ds, [s[1] / PEAK_FP32 * 100 for s in sweep_mfu], 'o-', color=BLUE, ms=6, label='fp32 run, % of fp32 peak')
-if LP_FAST: ax.plot(ds, [s[2] / PEAK_BF16 * 100 for s in sweep_mfu], 'o-', color=ORANGE, ms=6, label=f'{LP_NAME} run, % of {LP_NAME} ({LP_HW}) peak')
-if LP_FAST: ax.plot(ds, [s[1] / PEAK_BF16 * 100 for s in sweep_mfu], 'o--', color=BLUE, ms=5, lw=1.2, alpha=.6, label=f'fp32 run, % of {LP_NAME} ({LP_HW}) peak')
-ax.axhline(40, color=INK2, lw=1, ls=':'); ax.text(64, 41.5, '40% target', color=INK2, fontsize=9)
-ax.set_xscale('log', base=2); ax.set_xticks(ds); ax.set_xticklabels(ds); ax.set_ylim(0, 100)
-ax.set_xlabel('model width d (4 layers, B=32, T=128)'); ax.set_ylabel('MFU (%)'); ax.set_title('MFU depends on which peak you divide by'); ax.legend(loc='upper left')
-plt.tight_layout(); plt.savefig(os.path.join(FIG_DIR, 'mfu_sweep.png')); plt.show()
-METRICS['mfu_sweep'] = [dict(d=d, fp32=a, bf16=b) for d, a, b in sweep_mfu]
+lines = [(1, 'fp32 run', 'fp32_theoretical', BLUE, '-'), (1, 'fp32 run', 'fp32_measured', BLUE, '--')]
+if LP_FAST: lines += [(2, f'{LP_NAME} run', 'lowp_theoretical', ORANGE, '-'), (2, f'{LP_NAME} run', 'lowp_measured', ORANGE, '--')]
+ymax = 0
+for i, run, key, col, ls in lines:
+    if not DENOMS[key][0]: continue
+    ys = [s[i] / DENOMS[key][0] * 100 for s in sweep_mfu]; ymax = max(ymax, *ys)
+    ax.plot(ds, ys, marker='o', ls=ls, color=col, ms=6, label=f'{run} ÷ {DENOMS[key][1]}')
+ax.axhline(40, color=INK2, lw=1, ls=':'); ax.text(ds[0], 41.5, '40%: the usual target, measured against a theoretical low-precision peak', color=INK2, fontsize=8)
+ax.set_xscale('log', base=2); ax.set_xticks(ds); ax.set_xticklabels(ds); ax.set_ylim(0, max(100, ymax * 1.1))
+ax.set_xlabel('model width d (4 layers, B=32, T=128)'); ax.set_ylabel('MFU (%)'); ax.set_title(f'MFU depends on the denominator ({HW})')
+ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.16), ncol=1, fontsize=8, handlelength=4)
+plt.tight_layout(); plt.savefig(os.path.join(FIG_DIR, 'mfu_sweep.png'), bbox_inches='tight'); plt.show()
+METRICS['mfu_sweep'] = [dict(d=d, fp32_run_flops=a, lowp_run_flops=b, fp32_run=mfu_vs(a, RUN32_KEYS), lowp_run=(mfu_vs(b, LOWP_KEYS) if b else None))
+                        for d, a, b in sweep_mfu]
 checkpoint('5c. width sweep')
 
 #%% md
-### MFU, reported honestly
+### MFU: which number to quote
 
 *This discussion is about the committed CPU run. A GPU note follows the list.*
 
-The headline depends entirely on the denominator, so here are both, and which one I stand behind:
+MFU depends on the denominator, and no single one is correct for every workload. These are the committed CPU run's numbers, from the table above:
 
-- **Against the fp32 vector peak, the fp32 training config lands between about 26% and 43%.** That is the spread I saw across ten executions on this shared 2-vCPU VM; the cell above prints this execution's median and range over 5 timing windows, and the sweep times it once more. So on this yardstick it is close to 40% but usually short of it. MKL/oneDNN on AVX-512 is very good at medium-sized fp32 GEMMs; what is left is the ~40–45% of op time spent outside matmuls (profile below).
-- **That yardstick flatters me.** The 40% convention comes from GPUs measured against their bf16 tensor-core peak. This CPU's equivalent is AMX, which is 16× the fp32 vector peak. **Against the bf16/AMX peak, my training config is at about 2–3% MFU (this run's value is printed above), and even with bf16 autocast it is in the single digits.** That is the number I report as my MFU.
-- My actual 600-step main run did worse still on wall clock, because a third of its time went to the per-step probe diagnostics, which are not model FLOPs.
+| | fp32 theoretical (AVX-512 spec, CPU) | fp32 measured (2048² matmul, CPU) | bf16 theoretical (no bf16 hardware: fp32 rate, CPU) | bf16 measured (2048² matmul, CPU) |
+|---|---|---|---|---|
+| fp32 run | 22.7% | 34.9% | – | – |
+| bf16 run (emulated) | – | – | 11.4% | 75.0% |
+| main run, wall clock incl. probes | 13.0% | 20.0% | – | – |
 
-**What is costing the distance to 40% (of the bf16 peak), largest first:**
+- **Each column answers a different question.** fp32 ÷ fp32 measured (34.9%) asks how well the fp32 code uses what fp32 matmuls actually achieve on this box. fp32 ÷ fp32 theoretical (22.7%) asks how much of the spec-sheet arithmetic it uses.
+- **The usual 40% target is quoted against the theoretical peak of the fastest arithmetic the hardware has.** On this CPU that *is* the fp32 theoretical (AVX-512 spec) figure, because there is no faster low-precision hardware. So I lead with **22.7% of the fp32 theoretical (AVX-512 spec, CPU) peak**. That's the column comparable to 40%, not the "true" utilisation. On a machine with AMX or tensor cores, the comparable column would be the low-precision theoretical one, and the same fp32 code would score far lower (2.0% on the earlier AMX run).
+- **The fp32 run isn't compared against the bf16 denominators here.** Emulated bf16 is slower than fp32, so it's no ceiling for an fp32 run. Those cells are left blank.
+- **The main-run row has a different numerator.** It divides by the wall-clock time of the whole 600-step run, a third of which went to the per-step probe diagnostics. Those are not model FLOPs, so the row is lower and says so in its name.
 
-1. **Precision.** fp32 matmuls cannot use AMX at all. Training in fp32 caps MFU at 1/16 ≈ 6% of the bf16 peak before anything else goes wrong.
-2. **The matrices are tiny.** d = 128, head size 32, T = 128. AMX works on 16×32 bf16 tiles; with an inner dimension of 128 there is almost no reuse per tile load, so the units starve on memory and on oneDNN's re-packing of operands into tile layout. The width sweep shows the trend: utilisation climbs with d, though the top of the sweep is noisy on a shared machine. Even a large 2048² bf16 matmul reaches only about 40–60% of the AMX theoretical peak on two cores, depending on the run (printed above), so on this box the practical ceiling is already around half the peak before any model-specific loss.
-3. **Non-matmul work becomes the bottleneck once matmuls get fast.** In the profile, softmax / LayerNorm / GELU / cross-entropy, copies and masks, and the AdamW update are memory-bound and earn zero model FLOPs. Their share grows sharply in the bf16 run, because autocast makes the matmuls faster and adds dtype casts but does not speed up the rest. That is Amdahl's law in one table.
+**What is costing the distance to 40% (of the fp32 theoretical AVX-512 peak, this CPU's fastest), largest first:**
+
+1. **The matrices are tiny.** d = 128, head size 32, T = 128. With an inner dimension of 128 there is little reuse per load, so even MKL/oneDNN's AVX-512 kernels spend much of their time on memory traffic and packing. The width sweep shows it: the fp32 run climbs from 15.1% to 39.6% of the fp32 theoretical denominator from d = 64 to d = 512, so at d = 512 it reaches the 40% mark. Even a large 2048² fp32 matmul reaches only 65% of the spec sheet on two shared cores (233 of 358 GFLOP/s), so the practical ceiling sits well below the theoretical one before any model-specific loss.
+2. **Precision can't help on this CPU.** There is no faster low-precision hardware, and emulated bf16 is 2× *slower* than fp32 (562 vs 281 ms per step). On hardware with AMX or tensor cores the picture flips: there, fp32 training caps at about 1/16 ≈ 6% of the low-precision theoretical peak before anything else goes wrong.
+3. **Non-matmul work becomes the bottleneck once matmuls get fast.** In the profile, softmax / LayerNorm / GELU / cross-entropy, copies and masks, and the AdamW update are memory-bound and earn zero model FLOPs. In the fp32 profile they take about 42% of op time and earn zero model FLOPs. That is Amdahl's law: speeding up only the matmuls can never remove that share. (The emulated-bf16 column of the profile is matmul-heavy only because emulated matmuls are slow; it isn't representative of real bf16 hardware.)
 4. **Attention is unfused.** I materialise the (B, H, T, T) score and probability tensors and the causal mask explicitly. A fused attention kernel (`F.scaled_dot_product_attention`, FlashAttention on GPU) would never write them to memory.
 5. **Eager PyTorch overhead.** Dozens of small kernels per layer, each with Python and dispatcher overhead; no `torch.compile` to fuse elementwise chains.
 6. **Two cores.** Some of the per-op overhead is serial and does not parallelise, and there is no way to overlap data loading with compute.
 
-What would move it, in order: bf16 autocast with fp32 master weights, a fused attention kernel, `torch.compile`, and a wider model or larger micro-batch — exactly the knobs the sweep and the profile point to.
+What would move it, in order: a wider model or larger micro-batch, a fused attention kernel, and `torch.compile`. bf16 autocast with fp32 master weights helps only on hardware that runs bf16 natively. These are exactly the knobs the sweep and the profile point to.
 
-**On a GPU, expect an even lower MFU for this exact model, for a different reason.** At B = 32, T = 128, d = 128, each matmul is a few MFLOPs, which a GPU finishes in microseconds. The step time is then dominated by kernel-launch and Python overhead, not arithmetic, and the d = 1024 point in the sweep shows how fast utilisation recovers once the matrices are big enough to keep the tensor cores busy. The same cures apply, with `torch.compile` and CUDA graphs moving to the top of the list.
+**On a GPU, expect a low MFU against the theoretical tensor-core peak too, for a different reason.** At B = 32, T = 128, d = 128, each matmul is a few MFLOPs, which a GPU finishes in microseconds. The step time is then dominated by kernel-launch and Python overhead, not arithmetic, and the d = 1024 point in the sweep shows how fast utilisation recovers once the matrices are big enough to keep the tensor cores busy. The same cures apply, with `torch.compile` and CUDA graphs moving to the top of the list.
 
 #%% md
 ## 6. The number 0.1 in fp32, bf16 and fp8 E4M3 — by hand
@@ -954,7 +1017,7 @@ checkpoint('6. number formats')
 
 - **bf16 has fp32's exponent range** (8 bits, ~1e-38 to ~3e38). Gradients and activations neither overflow nor underflow, so unlike fp16 there is no loss scaling to tune and no skipped steps. That alone removes a whole class of training failures.
 - **Its precision is poor (~3 significant digits)** — 0.1 comes back as 0.10009765625. That is fine for the *inputs* of a matmul, whose errors average out across a long dot product accumulated in fp32, but fatal for the *weights*: as shown above, bf16 cannot represent 1.0 + 0.001, so a typical Adam update (lr × ~1) on a weight of size ~1 would simply vanish. Hence the fp32 master copy that the optimizer updates.
-- **It is what the hardware is built for.** Tensor cores and, on this machine, AMX run bf16 at 16× the fp32 vector rate. Section 5 showed fp32 training caps MFU at ~6% of this box's real peak.
+- **It is what the hardware is built for.** Tensor cores and Intel's AMX run bf16 at 16× the fp32 vector rate. The speed comes from that hardware, not from the format: on this run's CPU, which has neither, emulated bf16 was 2× *slower* than fp32 (section 5).
 - **fp8 E4M3 is not the format to train *in*.** With only three fraction bits, 0.1 is off by 1.6%, and 448 is the largest value; anything larger either saturates to 448 or becomes NaN, depending on the converter (the cell above shows which one this PyTorch does). It is used at very large scale for the matmuls only, with per-tensor (or per-block) scaling factors, E5M2 for gradients, and everything else still in bf16/fp32. For a 0.8 M-parameter model on a CPU, the engineering cost buys nothing.
 - **fp32 everywhere** (what I actually did here) is the safe reference and the right choice for correctness checks like the gradient check, but it leaves most of the hardware idle.
 
@@ -968,7 +1031,10 @@ g = METRICS['gradcheck']; a = METRICS['accum_train']; gl = METRICS['gnorm_lead']
 print(f'gradient check : backward {g["autograd"]:+.10e} vs finite diff {g["finite_diff"]:+.10e}  (rel err {g["rel_err"]:.1e}, fp64)')
 print(f'grad accum     : final val loss correct {np.mean(a["val_correct"]):.4f}, broken {np.mean(a["val_broken"]):.4f}  (gap {np.mean(a["gap"]):+.4f}, all 3 seeds)')
 print(f'grad norm lead : step {gl["step"]}: probe grad norm {gl["ratio"]:.2f}x baseline with loss flat; loss rose {gl["rise"]:+.3f} nats {gl["lag"]} step(s) later')
-print(f'MFU ({DEVICE})     : fp32 run {mf["fp32_mfu_vs_fp32"]:.1%} of fp32 peak = {mf["fp32_mfu_vs_bf16"]:.1%} of {LP_NAME} ({LP_HW}) peak; {LP_NAME} run {mf["bf16_mfu_vs_bf16"]:.1%} of {LP_NAME} peak')
+f, l = mf['fp32_run'], mf['lowp_run']; L = mf['peak_labels']
+order = ['lowp_theoretical', 'fp32_measured', 'fp32_theoretical', 'lowp_measured']
+print('MFU            : fp32 run = ' + ', '.join(f'{pct(f[k]).strip()} of {L[k]}' for k in order if k in f))
+print(f'                 {LP_NAME} run = {pct(l["lowp_theoretical"]).strip()} of {L["lowp_theoretical"]}, {pct(l["lowp_measured"]).strip()} of {L["lowp_measured"]}')
 print('0.1            : fp32 0x3DCCCCCD = 0.10000000149, bf16 0x3DCD = 0.10009765625, fp8 E4M3 0x1D = 0.1015625')
 
 #%% code
